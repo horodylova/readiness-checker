@@ -18,6 +18,9 @@ export type ScanOptions = {
 
 type Fetched = { url: string; status: number; contentType: string; body: string; truncated: boolean };
 
+const SCRIPT_POOL = 6;
+const FILE_POOL = 6;
+
 type Budget = { deadline: number; bytesLeft: number; timeoutMs: number };
 
 const USER_AGENT = "HorodylovaReadinessCheck/1.0 (+https://horodylova-ltd.co.uk/tools)";
@@ -269,22 +272,30 @@ export async function scanUrl(input: string, options: ScanOptions = {}): Promise
   const maps: string[] = [];
 
   while (queue.length && seen.size < maxScripts && !outOfBudget()) {
-    const next = queue.shift()!;
-    if (seen.has(next)) continue;
-    seen.add(next);
-    const res = await get(fetcher, next, budget, { maxBytes });
-    if (!res || res.status >= 400) continue;
-    if (res.truncated) warnings.push(`${next} is larger than ${Math.round(maxBytes / 1_000_000)} MB; only the first part was checked.`);
-    texts.push({ source: res.url, body: res.body });
-    for (const c of chunkReferences(res.body, page.url)) if (!seen.has(c) && sameSite(c, page.url)) queue.push(c);
-    const map = res.body.match(/\/\/[#@]\s*sourceMappingURL=([^\s'"]+)\s*$/m)?.[1];
-    if (map && !map.startsWith("data:")) {
-      try {
-        maps.push(new URL(map, res.url).toString());
-      } catch {}
-    } else if (!map && /\.js$/.test(new URL(res.url).pathname)) {
-      maps.push(`${res.url}.map`);
+    const batch: string[] = [];
+    while (queue.length && seen.size + batch.length < maxScripts && batch.length < SCRIPT_POOL) {
+      const next = queue.shift()!;
+      if (seen.has(next) || batch.includes(next)) continue;
+      batch.push(next);
     }
+    if (!batch.length) break;
+    for (const u of batch) seen.add(u);
+    const results = await Promise.all(batch.map((u) => get(fetcher, u, budget, { maxBytes })));
+    results.forEach((res, i) => {
+      const next = batch[i];
+      if (!res || res.status >= 400) return;
+      if (res.truncated) warnings.push(`${next} is larger than ${Math.round(maxBytes / 1_000_000)} MB; only the first part was checked.`);
+      texts.push({ source: res.url, body: res.body });
+      for (const c of chunkReferences(res.body, page.url)) if (!seen.has(c) && sameSite(c, page.url)) queue.push(c);
+      const map = res.body.match(/\/\/[#@]\s*sourceMappingURL=([^\s'"]+)\s*$/m)?.[1];
+      if (map && !map.startsWith("data:")) {
+        try {
+          maps.push(new URL(map, res.url).toString());
+        } catch {}
+      } else if (!map && /\.js$/.test(new URL(res.url).pathname)) {
+        maps.push(`${res.url}.map`);
+      }
+    });
   }
   if (queue.length && seen.size >= maxScripts) warnings.push(`The app loads more than ${maxScripts} scripts; the first ${maxScripts} were checked.`);
   if (skipped) warnings.push(`${skipped} script${skipped === 1 ? "" : "s"} from other domains were not checked.`);
@@ -333,9 +344,19 @@ export async function scanUrl(input: string, options: ScanOptions = {}): Promise
 
   const origin = new URL(page.url).origin;
   const fileHits = new Set<string>();
-  for (const f of EXPOSED_FILES) {
-    if (fileHits.has(f.id) || outOfBudget()) continue;
-    const res = await get(fetcher, `${origin}${f.path}`, budget, { maxBytes: 200_000 });
+  const fileResults: (Fetched | null)[] = [];
+  for (let i = 0; i < EXPOSED_FILES.length; i += FILE_POOL) {
+    const slice = EXPOSED_FILES.slice(i, i + FILE_POOL);
+    if (outOfBudget()) {
+      slice.forEach(() => fileResults.push(null));
+      continue;
+    }
+    const got = await Promise.all(slice.map((f) => get(fetcher, `${origin}${f.path}`, budget, { maxBytes: 200_000 })));
+    fileResults.push(...got);
+  }
+  for (const [index, f] of EXPOSED_FILES.entries()) {
+    if (fileHits.has(f.id)) continue;
+    const res = fileResults[index];
     if (!res || res.status !== 200 || /text\/html/i.test(res.contentType) || !f.test(res.body)) continue;
     fileHits.add(f.id);
     const secretsInside = findSecrets(res.body, `${origin}${f.path}`);
