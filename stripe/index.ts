@@ -15,7 +15,7 @@ const ACCEPTED =
 export function detectStripeInput(raw: string): StripeInput {
   const s = raw.trim();
   if (!s) return { kind: "unknown", message: ACCEPTED };
-  if (/^curl: \(\d+\)/m.test(s) || /^HTTP\/[\d.]+\s+\d{3}\b/m.test(s) || /^\d{3}$/.test(s)) return { kind: "signature" };
+  if (/^curl: \(\d+\)/m.test(s) || /^HTTP\/[\d.]+\s+\d{3}\b/m.test(s) || /^\d{3}$/.test(s) || /^StatusCode\s*:\s*\d{3}\b/m.test(s)) return { kind: "signature" };
   if (/^[{[]/.test(s)) {
     if (/"object"\s*:\s*"webhook_endpoint"|"\/v1\/webhook_endpoints"|"enabled_events"/.test(s)) return { kind: "endpoints" };
     return { kind: "unknown", message: "This JSON is not a list of webhook endpoints. Run the command from step 1 and paste its output." };

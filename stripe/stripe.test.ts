@@ -81,6 +81,7 @@ describe("signature probe", () => {
     if (!c.ok) throw new Error(c.error);
     expect(c.powershell.startsWith("curl.exe -sS -i")).toBe(true);
     expect(c.powershell.includes("\n")).toBe(false);
+    expect(c.powershell).toContain('\\"type\\":\\"readiness.check.unsigned\\"');
     expect(c.command).toContain("curl -sS -i");
   });
   test("Invoke-WebRequest style output is read", () => {
@@ -165,6 +166,26 @@ describe("handler code", () => {
   test("handler without a route string or header read is still a handler when it switches on event.type", () => {
     expect(has(codeRules(fx("handler-bad.txt")), "CODE-01", "critical")).toBe(true);
   });
+  test("storing the verified event as JSON for idempotency is not re-serialised verification", () => {
+    const src = `const event = stripe.webhooks.constructEvent(body, sig, process.env.STRIPE_WEBHOOK_SECRET!);
+    await db.from("stripe_events").insert({ id: event.id, payload: JSON.stringify(event) });
+    switch (event.type) { case "payment_intent.succeeded": await markPaid(event.data.object.id); }`;
+    expect(codeRules(src).some((x) => x.rule === "CODE-02")).toBe(false);
+  });
+  test("empty-string fallback for the secret is not a literal secret", () => {
+    const src = `const event = stripe.webhooks.constructEvent(body, sig, process.env.STRIPE_WEBHOOK_SECRET || "");
+    await db.stripeEvents.create({ data: { id: event.id } });`;
+    expect(codeRules(src).some((x) => x.rule === "CODE-05")).toBe(false);
+  });
+  test("Python checkout with amount from the request", () => {
+    const src = `data = request.get_json()
+session = stripe.checkout.Session.create(
+    mode="payment",
+    client_reference_id=data["user"],
+    line_items=[{"price_data": {"currency": "usd", "product_data": {"name": "x"}, "unit_amount": int(data["amount"])}, "quantity": 1}],
+    success_url="https://a.example/ok", cancel_url="https://a.example/no")`;
+    expect(codeRules(src).some((x) => x.rule === "CHK-01")).toBe(true);
+  });
   test("pasted secrets are refused and not analysed", () => {
     const key = ["sk", "live", "A1b2C3d4E5f6G7h8I9j0K1l2M3n4"].join("_");
     const r = screenCode(`const stripe = new Stripe("${key}");`);
@@ -195,6 +216,7 @@ describe("routing", () => {
     ["HTTP/2 200\n\nok", "signature"],
     ["400", "signature"],
     ["curl: (7) Failed to connect", "signature"],
+    ["StatusCode        : 400\nStatusDescription : Bad Request", "signature"],
     [fx("handler-good.txt"), "code"],
     [fx("handler-python.txt"), "code"],
     [fx("checkout-bad.txt"), "code"],

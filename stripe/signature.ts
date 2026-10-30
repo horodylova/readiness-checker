@@ -27,7 +27,7 @@ export function probeCommand(endpointUrl: string): { ok: true; command: string; 
     `  -H 'Stripe-Signature: ${FAKE_SIGNATURE}'`,
     `  --data '${body}'`,
   ].join(" \\\n");
-  const powershell = `curl.exe -sS -i -X POST '${url}' -H 'Content-Type: application/json' -H 'Stripe-Signature: ${FAKE_SIGNATURE}' --data '${probeBody}'`;
+  const powershell = `curl.exe -sS -i -X POST '${url}' -H 'Content-Type: application/json' -H 'Stripe-Signature: ${FAKE_SIGNATURE}' --data '${probeBody.replace(/"/g, '\\"')}'`;
   return { ok: true, command, powershell };
 }
 

@@ -10,6 +10,21 @@ function section(src: string, start: number, length = 1800): string {
   return src.slice(start, start + length);
 }
 
+function callArguments(src: string, start: number): string {
+  const open = src.indexOf("(", start);
+  if (open < 0) return "";
+  let depth = 0;
+  for (let i = open; i < src.length && i < open + 2000; i++) {
+    const ch = src[i];
+    if (ch === "(") depth += 1;
+    else if (ch === ")") {
+      depth -= 1;
+      if (depth === 0) return src.slice(open + 1, i);
+    }
+  }
+  return src.slice(open + 1, open + 2000);
+}
+
 function stripStrings(src: string): string {
   return src.replace(/(["'`])(?:\\.|(?!\1)[^\\\n])*\1/g, (m) => m[0] + " ".repeat(Math.max(0, m.length - 2)) + m[0]);
 }
@@ -96,7 +111,7 @@ export function codeRules(src: string): Finding[] {
         remedy: "Pass the raw request body, the Stripe-Signature header and the endpoint's signing secret to the library's constructEvent (or construct_event) before touching the event, and return 400 when it throws.",
       });
     } else {
-      const call = section(code, verify.index, 400);
+      const call = callArguments(code, verify.index);
       const before = code.slice(Math.max(0, verify.index - 1500), verify.index);
       if (/JSON\.stringify\s*\(|json\.dumps\s*\(|json_encode\s*\(|to_json\b/.test(call)) {
         add({
@@ -134,11 +149,11 @@ export function codeRules(src: string): Finding[] {
         });
       }
       const literalSecret =
-        /\bconstructEvent(Async)?\s*\(\s*[^,]+,\s*[^,]+,\s*(process\.env\.\w+\s*(\|\||\?\?)\s*["'`]|Deno\.env\.get\([^)]*\)\s*(\|\||\?\?)\s*["'`]|["'`])/.test(srcNoComments) ||
-        /\bconstruct_event\s*\([\s\S]{0,200}?os\.(environ\.get|getenv)\s*\([^)]*,\s*["']/.test(srcNoComments) ||
-        /\bconstruct_event\s*\([\s\S]{0,200}?ENV\.fetch\s*\([^)]*,\s*["']/.test(srcNoComments) ||
-        /\bconstructEvent\s*\([\s\S]{0,200}?(getenv|env)\s*\([^)]*\)\s*(\?:|\?\?)\s*["']/.test(srcNoComments) ||
-        /\bconstruct_event\s*\(\s*[^,]+,\s*[^,]+,\s*["']/.test(srcNoComments);
+        /\bconstructEvent(Async)?\s*\(\s*[^,]+,\s*[^,]+,\s*(process\.env\.\w+\s*(\|\||\?\?)\s*["'`](?!["'`])|Deno\.env\.get\([^)]*\)\s*(\|\||\?\?)\s*["'`](?!["'`])|["'`](?!["'`]))/.test(srcNoComments) ||
+        /\bconstruct_event\s*\([\s\S]{0,200}?os\.(environ\.get|getenv)\s*\([^)]*,\s*["'](?!["'])/.test(srcNoComments) ||
+        /\bconstruct_event\s*\([\s\S]{0,200}?ENV\.fetch\s*\([^)]*,\s*["'](?!["'])/.test(srcNoComments) ||
+        /\bconstructEvent\s*\([\s\S]{0,200}?(getenv|env)\s*\([^)]*\)\s*(\?:|\?\?)\s*["'](?!["'])/.test(srcNoComments) ||
+        /\bconstruct_event\s*\(\s*[^,]+,\s*[^,]+,\s*["'](?!["'])/.test(srcNoComments);
       if (literalSecret) {
         add({
           rule: "CODE-05",
@@ -216,11 +231,11 @@ export function codeRules(src: string): Finding[] {
 
   const checkout = CHECKOUT_CREATE.exec(code) ?? PAYMENT_INTENT_CREATE.exec(code);
   if (checkout) {
-    const call = section(code, checkout.index, 2500);
-    const callSrc = section(src, checkout.index, 2500);
+    const call = section(srcNoComments, checkout.index, 2500);
+    const callSrc = call;
     const obj = "checkout";
     const bound = requestBoundNames(code);
-    const amountExpr = call.match(/\b(unit_amount|amount)\s*(?::|=>)\s*(?:(?:Math\.\w+|Number|parseInt|parseFloat|int|float|round|intval|\(int\))\s*\(\s*)?\+?\s*([$]?[A-Za-z_][\w$]*(?:\.[\w$]+|\[[^\]]*\]|->\w+)*)/);
+    const amountExpr = call.match(/\b(unit_amount|amount)["']?\s*(?::|=>|=(?!=))\s*(?:(?:Math\.\w+|Number|parseInt|parseFloat|int|float|round|intval|\(int\))\s*\(\s*)?\+?\s*([$]?[A-Za-z_][\w$]*(?:\.[\w$]+|\[[^\]]*\]|->\w+)*)/);
     if (amountExpr && fromRequest(amountExpr[2], bound) && !/\bunit_amount\s*:\s*\d+/.test(call)) {
       add({
         rule: "CHK-01",
@@ -231,7 +246,7 @@ export function codeRules(src: string): Finding[] {
         remedy: "Look the price up on the server from the product or plan the customer chose, or use a Price ID created in the Dashboard.",
       });
     }
-    const priceExpr = call.match(/\bprice\s*(?::|=>)\s*([$]?[A-Za-z_][\w$]*(?:\.[\w$]+|\[[^\]]*\]|->\w+)*)/);
+    const priceExpr = call.match(/\bprice["']?\s*(?::|=>|=(?!=))\s*([$]?[A-Za-z_][\w$]*(?:\.[\w$]+|\[[^\]]*\]|->\w+)*)/);
     const priceRoot = priceExpr?.[1].match(/^[$]?[A-Za-z_][\w$]*/)?.[0] ?? "";
     const priceLooksClientSupplied = priceExpr ? fromRequest(priceExpr[1], bound) || /^price_?id$/i.test(priceRoot) : false;
     if (priceLooksClientSupplied && !/\b(includes|has|indexOf|allowed|ALLOWED|whitelist|PRICES|prices\[|plans\[|PLANS|switch|lookup|findUnique|findFirst|from\(|select)\b/.test(code.slice(Math.max(0, checkout.index - 2500), checkout.index + 2500))) {
