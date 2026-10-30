@@ -38,10 +38,11 @@ export function parseEndpoints(raw: string): EndpointsParse {
   if (s.length > 2_000_000) return { ok: false, error: "The input is larger than 2 MB." };
   const warnings: string[] = [];
 
-  if (/^[{[]/.test(s)) {
+  const jsonStart = s.search(/[{[]/);
+  if (jsonStart >= 0 && (jsonStart === 0 || /webhook_endpoints|git:|\$\s*$|➜/m.test(s.slice(0, jsonStart)))) {
     let data: unknown;
     try {
-      data = JSON.parse(s);
+      data = JSON.parse(s.slice(jsonStart, Math.max(s.lastIndexOf("}"), s.lastIndexOf("]")) + 1));
     } catch {
       return { ok: false, error: "The input is not valid JSON. Copy the whole output of the command." };
     }

@@ -228,6 +228,19 @@ describe("routing", () => {
   ])("routes input %#", (input, kind) => {
     expect(detectStripeInput(input).kind).toBe(kind);
   });
+  test("a terminal block with the command and its response is read as the response", () => {
+    const c = stripeCommands.probe("https://app.example.com/api/stripe/webhook");
+    const block = `➜  app git:(main) ${c.ok ? c.command : ""}\nHTTP/2 400 \ncontent-type: application/json\n\n{"error":"Invalid signature"}%\n➜  app git:(main)`;
+    expect(detectStripeInput(block).kind).toBe("signature");
+    const r = runStripeCheck(block);
+    expect(r.ok && r.report.findings[0].rule).toBe("SIG-00");
+  });
+  test("a terminal block with the list command and its JSON is read as endpoints", () => {
+    const block = `➜  app git:(main) stripe webhook_endpoints list --limit 100\n${fx("endpoints-good.json")}\n➜  app git:(main)`;
+    expect(detectStripeInput(block).kind).toBe("endpoints");
+    const r = runStripeCheck(block);
+    expect(r.ok && r.report.engine).toBe("stripe-endpoints");
+  });
   test("pasting the command itself is explained, not analysed as code", () => {
     const c = stripeCommands.probe("https://app.example.com/api/stripe/webhook");
     const r = runStripeCheck(c.ok ? c.command : "");
