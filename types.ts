@@ -18,7 +18,7 @@ export type Finding = {
   evidence?: string;
 };
 
-export type Engine = "supabase-inventory" | "url";
+export type Engine = "supabase-inventory" | "url" | "stripe-endpoints" | "stripe-signature" | "stripe-code";
 
 export type DetectedStack = {
   supabase?: { url?: string; projectRef?: string; anonKeyFound: boolean };

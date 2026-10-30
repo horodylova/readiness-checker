@@ -1,0 +1,21 @@
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+const express = require("express");
+const app = express();
+
+app.post("/webhook", express.json(), async (req, res) => {
+  let event = req.body;
+  try {
+    event = stripe.webhooks.constructEvent(JSON.stringify(req.body), req.headers["stripe-signature"], process.env.STRIPE_WEBHOOK_SECRET || "whsec_dev");
+  } catch (err) {
+    console.log("signature failed, continuing", err.message);
+  }
+  try {
+    if (event.type === "payment_intent.succeeded") {
+      await markPaid(event.data.object.metadata.orderId);
+    }
+    res.json({ received: true });
+  } catch (e) {
+    console.error(e);
+    res.status(200).json({ received: true });
+  }
+});

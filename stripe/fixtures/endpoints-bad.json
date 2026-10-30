@@ -1,0 +1,46 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "we_1XyZ",
+      "object": "webhook_endpoint",
+      "api_version": "2022-11-15",
+      "application": null,
+      "created": 1700000000,
+      "description": null,
+      "enabled_events": ["customer.subscription.created", "invoice.created"],
+      "livemode": true,
+      "metadata": {},
+      "status": "disabled",
+      "url": "http://app.example.com/webhook"
+    },
+    {
+      "id": "we_2XyZ",
+      "object": "webhook_endpoint",
+      "api_version": null,
+      "application": null,
+      "created": 1750000000,
+      "description": null,
+      "enabled_events": ["checkout.session.completed"],
+      "livemode": true,
+      "metadata": {},
+      "status": "enabled",
+      "url": "https://abcd-1234.ngrok-free.app/api/webhook"
+    },
+    {
+      "id": "we_3XyZ",
+      "object": "webhook_endpoint",
+      "api_version": null,
+      "application": null,
+      "created": 1750000001,
+      "description": null,
+      "enabled_events": ["checkout.session.completed"],
+      "livemode": true,
+      "metadata": {},
+      "status": "enabled",
+      "url": "https://abcd-1234.ngrok-free.app/api/webhook"
+    }
+  ],
+  "has_more": true,
+  "url": "/v1/webhook_endpoints"
+}

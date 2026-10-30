@@ -1,0 +1,38 @@
+import Stripe from "stripe";
+import { NextResponse } from "next/server";
+import { db } from "@/lib/db";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+
+export async function POST(req: Request) {
+  const body = await req.text();
+  const sig = req.headers.get("stripe-signature")!;
+  let event: Stripe.Event;
+  try {
+    event = stripe.webhooks.constructEvent(body, sig, process.env.STRIPE_WEBHOOK_SECRET!);
+  } catch (err) {
+    return new NextResponse("Invalid signature", { status: 400 });
+  }
+
+  const { error } = await db.from("stripe_events").insert({ id: event.id, type: event.type });
+  if (error?.code === "23505") return NextResponse.json({ received: true });
+
+  switch (event.type) {
+    case "checkout.session.completed": {
+      const session = event.data.object as Stripe.Checkout.Session;
+      if (session.payment_status === "paid") await grant(session.client_reference_id!);
+      break;
+    }
+    case "checkout.session.async_payment_succeeded":
+      await grant((event.data.object as Stripe.Checkout.Session).client_reference_id!);
+      break;
+    case "customer.subscription.updated":
+    case "customer.subscription.deleted":
+      await syncSubscription(event.data.object as Stripe.Subscription);
+      break;
+    case "invoice.payment_failed":
+      await markPastDue((event.data.object as Stripe.Invoice).customer as string);
+      break;
+  }
+  return NextResponse.json({ received: true });
+}

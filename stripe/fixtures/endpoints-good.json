@@ -1,0 +1,29 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "we_1AbCdEfGhIjKlMnOpQrStUvW",
+      "object": "webhook_endpoint",
+      "api_version": "2025-03-31.basil",
+      "application": null,
+      "created": 1760000000,
+      "description": "Production app",
+      "enabled_events": [
+        "checkout.session.completed",
+        "checkout.session.async_payment_succeeded",
+        "checkout.session.async_payment_failed",
+        "customer.subscription.updated",
+        "customer.subscription.deleted",
+        "invoice.payment_failed",
+        "invoice.paid",
+        "charge.dispute.created"
+      ],
+      "livemode": true,
+      "metadata": {},
+      "status": "enabled",
+      "url": "https://app.example.com/api/stripe/webhook"
+    }
+  ],
+  "has_more": false,
+  "url": "/v1/webhook_endpoints"
+}

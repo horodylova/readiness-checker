@@ -1,0 +1,19 @@
+import Stripe from "stripe";
+import { NextResponse } from "next/server";
+import { supabase } from "@/lib/supabase";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+
+export async function POST(req: Request) {
+  const event = await req.json();
+  console.log("webhook", event.type);
+
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
+    await supabase.from("profiles").update({ is_pro: true }).eq("id", session.metadata.userId);
+  }
+  if (event.type === "customer.subscription.updated") {
+    await supabase.from("profiles").update({ plan: event.data.object.items.data[0].price.id });
+  }
+  return NextResponse.json({ received: true });
+}
