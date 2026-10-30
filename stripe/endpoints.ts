@@ -93,10 +93,10 @@ export function endpointRules(endpoints: WebhookEndpoint[], now = new Date()): F
       rule: "WH-00",
       severity: "high",
       object: "webhook endpoints",
-      title: "No webhook endpoint",
+      title: "No webhook endpoint in this mode",
       detail:
-        "Nothing tells your server when a payment succeeds, fails or is refunded. If access is granted on the success page, a visitor can open that page without paying, and a failed renewal is never noticed.",
-      remedy: "Create an endpoint in Developers, Webhooks, and grant access from the event handler, never from the redirect page.",
+        "The list is empty. The command shows test mode by default and live mode with --live, so check the other mode first. If both are empty, nothing tells your server when a payment succeeds, fails or is refunded: access granted on the success page can be reached without paying, and a failed renewal is never noticed.",
+      remedy: "Run the command with --live. If that list is empty too, create an endpoint in Developers, Webhooks, and grant access from the event handler, never from the redirect page.",
     });
     return out;
   }
@@ -282,6 +282,6 @@ export function endpointsReport(raw: string): Report | { error: string } {
     warnings: parsed.warnings,
     next: parsed.endpoints.length
       ? ["Step 2: test the signature check on each endpoint address with the command from this page."]
-      : [],
+      : ["Run the same command with --live and paste that list as well."],
   };
 }
