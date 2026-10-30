@@ -1,0 +1,23 @@
+class StripeWebhooksController < ApplicationController
+  skip_before_action :verify_authenticity_token
+
+  def create
+    payload = request.body.read
+    sig_header = request.env["HTTP_STRIPE_SIGNATURE"]
+    begin
+      event = Stripe::Webhook.construct_event(payload, sig_header, ENV.fetch("STRIPE_WEBHOOK_SECRET"))
+    rescue JSON::ParserError, Stripe::SignatureVerificationError
+      head :bad_request
+      return
+    end
+    return head :ok if ProcessedEvent.exists?(event_id: event.id)
+    ProcessedEvent.create!(event_id: event.id)
+    case event.type
+    when "customer.subscription.deleted"
+      Subscription.find_by(stripe_id: event.data.object.id)&.deactivate!
+    when "invoice.payment_failed"
+      Subscription.find_by(stripe_id: event.data.object.subscription)&.past_due!
+    end
+    head :ok
+  end
+end

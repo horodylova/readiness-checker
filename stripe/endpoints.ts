@@ -55,7 +55,7 @@ export function parseEndpoints(raw: string): EndpointsParse {
       return { ok: false, error: "This JSON does not contain Stripe webhook endpoints. Run the command from this page and paste its output." };
     }
     if (data && typeof data === "object" && (data as { has_more?: unknown }).has_more === true) {
-      warnings.push("The list is truncated. Add --limit 100 to the command to see every endpoint.");
+      warnings.push("The list is truncated at 100 endpoints. Run the command again with --starting-after and the last id in this output, or check the rest in Developers, Webhooks.");
     }
     return { ok: true, endpoints, source: "json", warnings };
   }

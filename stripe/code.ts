@@ -14,6 +14,41 @@ function stripStrings(src: string): string {
   return src.replace(/(["'`])(?:\\.|(?!\1)[^\\\n])*\1/g, (m) => m[0] + " ".repeat(Math.max(0, m.length - 2)) + m[0]);
 }
 
+function stripComments(src: string): string {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+    .replace(/(^|[^:\\"'`])\/\/[^\n]*/g, (m, lead) => lead + " ".repeat(m.length - lead.length))
+    .replace(/(^|[^"'`$])#(?!\{)[^\n]*/gm, (m, lead) => lead + " ".repeat(m.length - lead.length));
+}
+
+const REQUEST_ROOTS = ["req", "request", "searchParams", "formData", "$_POST", "$_GET", "$_REQUEST"];
+
+function requestBoundNames(code: string): Set<string> {
+  const names = new Set<string>();
+  const re = /(?:const|let|var)\s+(\{[^}]*\}|[A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?(?:req(?:uest)?\.(?:json|formData|text)\s*\(\)|req(?:uest)?\.(?:body|query|params)\b|JSON\.parse\s*\(|request\.(?:get_json|form|json|args)\b|\$request->(?:all|input|json|post)\s*\(|params\.permit|JSON\.parse\s*\(\s*request\.body)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code))) {
+    const target = m[1];
+    if (target.startsWith("{")) {
+      for (const part of target.slice(1, -1).split(",")) {
+        const name = part.split(":").pop()?.split("=")[0]?.trim();
+        if (name) names.add(name);
+      }
+    } else {
+      names.add(target);
+    }
+  }
+  const py = /^\s*([A-Za-z_]\w*)\s*=\s*(?:request\.(?:get_json|json|form|args)|json\.loads\s*\(\s*request)/gm;
+  while ((m = py.exec(code))) names.add(m[1]);
+  return names;
+}
+
+function fromRequest(expr: string, names: Set<string>): boolean {
+  const root = expr.match(/^[$]?[A-Za-z_][\w$]*/)?.[0];
+  if (!root) return false;
+  return REQUEST_ROOTS.includes(root) || names.has(root);
+}
+
 export function detectStripeCode(src: string): boolean {
   return /\bstripe\b/i.test(src) && (VERIFY.test(src) || CHECKOUT_CREATE.test(src) || PAYMENT_INTENT_CREATE.test(src) || /webhook/i.test(src));
 }
@@ -22,7 +57,7 @@ export type CodeParse = { ok: true; warnings: string[] } | { ok: false; error: s
 
 export function screenCode(src: string): CodeParse {
   if (src.length > 400_000) return { ok: false, error: "The input is larger than 400 KB. Paste the webhook handler and the checkout code only." };
-  const secrets = findSecrets(src, "pasted code").filter((h) => /STRIPE|PRIVATE-KEY|DB-URL|OPENAI|ANTHROPIC|AWS|GITHUB/.test(h.pattern.id));
+  const secrets = findSecrets(src, "pasted code").filter((h) => h.pattern.id !== "SEC-GOOGLE-AI");
   if (secrets.length) {
     const names = [...new Set(secrets.map((h) => h.pattern.name))].join(", ");
     return {
@@ -36,9 +71,18 @@ export function screenCode(src: string): CodeParse {
 export function codeRules(src: string): Finding[] {
   const out: Finding[] = [];
   const add = (f: Finding) => out.push(f);
-  const code = stripStrings(src);
-  const hasWebhook = /webhook|constructEvent|construct_event|ConstructEvent|Stripe-Signature|stripe-signature/i.test(src);
+  const noComments = stripComments(stripStrings(src));
+  const code = noComments;
+  const srcNoComments = stripComments(src);
+  const hasWebhook =
+    VERIFY.test(code) ||
+    /stripe-signature|HTTP_STRIPE_SIGNATURE/i.test(srcNoComments) ||
+    /webhook/i.test(code) ||
+    /\b(post|route|path|get|all|handle|match)\b[^\n]{0,80}["'`][^"'`\n]*webhook/i.test(srcNoComments) ||
+    /\b(event|evt)\s*(\.type\b|\.data\.object\b|\[\s*["']type["']\s*\])/.test(srcNoComments) ||
+    /["'](checkout\.session\.completed|payment_intent\.succeeded|invoice\.paid|invoice\.payment_failed|customer\.subscription\.\w+)["']/.test(srcNoComments);
   const verify = VERIFY.exec(code);
+  const pythonOrRuby = /\bconstruct_event\b/.test(code);
   const handler = "webhook handler";
 
   if (hasWebhook) {
@@ -54,7 +98,7 @@ export function codeRules(src: string): Finding[] {
     } else {
       const call = section(code, verify.index, 400);
       const before = code.slice(Math.max(0, verify.index - 1500), verify.index);
-      if (/JSON\.stringify\s*\(/.test(call)) {
+      if (/JSON\.stringify\s*\(|json\.dumps\s*\(|json_encode\s*\(|to_json\b/.test(call)) {
         add({
           rule: "CODE-02",
           severity: "high",
@@ -63,7 +107,11 @@ export function codeRules(src: string): Finding[] {
           detail: "The body is parsed and then stringified again before verification. The signature covers the exact bytes Stripe sent, so this check either always fails, in which case deliveries are rejected, or the failure is swallowed and events are processed unverified.",
           remedy: "Read the raw body (request.text() in Next.js and Hono, express.raw({ type: 'application/json' }) in Express, request.get_data() in Flask) and pass it to the verification unchanged.",
         });
-      } else if (/\b(req(uest)?\.body|await\s+req(uest)?\.json\(\)|body\s*=\s*await\s+req(uest)?\.json\(\))/.test(before + call) && !/\b(raw|text\(\)|rawBody|arrayBuffer\(\)|Buffer|get_data|getRawBody|bodyParser\.raw|express\.raw|type:\s*["']\*\/\*)/.test(src)) {
+      } else if (
+        !pythonOrRuby &&
+        /\b(req(uest)?\.body|await\s+req(uest)?\.json\(\)|body\s*=\s*await\s+req(uest)?\.json\(\))/.test(before + call) &&
+        !/\b(raw|text\(\)|rawBody|arrayBuffer\(\)|Buffer|get_data|getRawBody|bodyParser\.raw|express\.raw|type:\s*["']\*\/\*)/.test(src)
+      ) {
         add({
           rule: "CODE-03",
           severity: "medium",
@@ -85,7 +133,13 @@ export function codeRules(src: string): Finding[] {
           remedy: "Return 400 from the catch block.",
         });
       }
-      if (/\bwebhooks\.constructEvent\s*\(\s*[^,]+,\s*[^,]+,\s*(process\.env\.\w+\s*(\|\||\?\?)\s*["'`]|["'`])/.test(src)) {
+      const literalSecret =
+        /\bconstructEvent(Async)?\s*\(\s*[^,]+,\s*[^,]+,\s*(process\.env\.\w+\s*(\|\||\?\?)\s*["'`]|Deno\.env\.get\([^)]*\)\s*(\|\||\?\?)\s*["'`]|["'`])/.test(srcNoComments) ||
+        /\bconstruct_event\s*\([\s\S]{0,200}?os\.(environ\.get|getenv)\s*\([^)]*,\s*["']/.test(srcNoComments) ||
+        /\bconstruct_event\s*\([\s\S]{0,200}?ENV\.fetch\s*\([^)]*,\s*["']/.test(srcNoComments) ||
+        /\bconstructEvent\s*\([\s\S]{0,200}?(getenv|env)\s*\([^)]*\)\s*(\?:|\?\?)\s*["']/.test(srcNoComments) ||
+        /\bconstruct_event\s*\(\s*[^,]+,\s*[^,]+,\s*["']/.test(srcNoComments);
+      if (literalSecret) {
         add({
           rule: "CODE-05",
           severity: "high",
@@ -165,8 +219,9 @@ export function codeRules(src: string): Finding[] {
     const call = section(code, checkout.index, 2500);
     const callSrc = section(src, checkout.index, 2500);
     const obj = "checkout";
-    const amountFromRequest = /\b(unit_amount|amount)\s*:\s*(?:Math\.\w+\(|Number\(|parseInt\(|parseFloat\(|\+)?\s*(req(uest)?\.|body\.|json\.|params\.|searchParams|formData|form\.|payload\.|input\.|args\.|data\.|amount\b|price\b|total\b)/;
-    if (amountFromRequest.test(call) && !/\bunit_amount\s*:\s*\d+/.test(call)) {
+    const bound = requestBoundNames(code);
+    const amountExpr = call.match(/\b(unit_amount|amount)\s*(?::|=>)\s*(?:(?:Math\.\w+|Number|parseInt|parseFloat|int|float|round|intval|\(int\))\s*\(\s*)?\+?\s*([$]?[A-Za-z_][\w$]*(?:\.[\w$]+|\[[^\]]*\]|->\w+)*)/);
+    if (amountExpr && fromRequest(amountExpr[2], bound) && !/\bunit_amount\s*:\s*\d+/.test(call)) {
       add({
         rule: "CHK-01",
         severity: "critical",
@@ -176,8 +231,10 @@ export function codeRules(src: string): Finding[] {
         remedy: "Look the price up on the server from the product or plan the customer chose, or use a Price ID created in the Dashboard.",
       });
     }
-    const priceFromRequest = /\bprice\s*:\s*(req(uest)?\.|body\.|json\.|params\.|searchParams|formData|form\.|payload\.|input\.|args\.|data\.|priceId\b|price_id\b)/;
-    if (priceFromRequest.test(call) && !/\b(includes|has|indexOf|allowed|ALLOWED|whitelist|PRICES|prices\[|plans\[|PLANS|switch|lookup|findUnique|findFirst|from\(|select)\b/.test(code.slice(Math.max(0, checkout.index - 2500), checkout.index + 2500))) {
+    const priceExpr = call.match(/\bprice\s*(?::|=>)\s*([$]?[A-Za-z_][\w$]*(?:\.[\w$]+|\[[^\]]*\]|->\w+)*)/);
+    const priceRoot = priceExpr?.[1].match(/^[$]?[A-Za-z_][\w$]*/)?.[0] ?? "";
+    const priceLooksClientSupplied = priceExpr ? fromRequest(priceExpr[1], bound) || /^price_?id$/i.test(priceRoot) : false;
+    if (priceLooksClientSupplied && !/\b(includes|has|indexOf|allowed|ALLOWED|whitelist|PRICES|prices\[|plans\[|PLANS|switch|lookup|findUnique|findFirst|from\(|select)\b/.test(code.slice(Math.max(0, checkout.index - 2500), checkout.index + 2500))) {
       add({
         rule: "CHK-02",
         severity: "medium",

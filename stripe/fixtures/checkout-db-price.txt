@@ -1,0 +1,18 @@
+import Stripe from "stripe";
+import { supabase } from "@/lib/supabase";
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+
+export async function POST(req: Request) {
+  const user = await requireUser(req);
+  const { productId } = await req.json();
+  const { data } = await supabase.from("products").select("name, price_pence").eq("id", productId).single();
+  if (!data) return new Response("Unknown product", { status: 404 });
+  const session = await stripe.checkout.sessions.create({
+    mode: "payment",
+    client_reference_id: user.id,
+    line_items: [{ price_data: { currency: "gbp", product_data: { name: data.name }, unit_amount: data.price_pence }, quantity: 1 }],
+    success_url: "https://app.example.com/orders",
+    cancel_url: "https://app.example.com/shop",
+  });
+  return Response.json({ url: session.url });
+}

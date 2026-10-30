@@ -1,0 +1,22 @@
+import os
+import stripe
+from django.http import HttpResponse
+from django.views.decorators.csrf import csrf_exempt
+from .models import StripeEvent, Subscription
+
+@csrf_exempt
+def stripe_webhook(request):
+    payload = request.body
+    sig_header = request.META.get("HTTP_STRIPE_SIGNATURE", "")
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, os.environ["STRIPE_WEBHOOK_SECRET"])
+    except (ValueError, stripe.error.SignatureVerificationError):
+        return HttpResponse(status=400)
+    _, created = StripeEvent.objects.get_or_create(event_id=event["id"])
+    if not created:
+        return HttpResponse(status=200)
+    if event["type"] == "customer.subscription.deleted":
+        Subscription.deactivate(event["data"]["object"]["id"])
+    elif event["type"] == "invoice.payment_failed":
+        Subscription.mark_past_due(event["data"]["object"]["subscription"])
+    return HttpResponse(status=200)

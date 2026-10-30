@@ -1,0 +1,18 @@
+import json
+import os
+import stripe
+from flask import Flask, request, abort
+
+app = Flask(__name__)
+
+@app.route("/stripe/webhook", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    sig = request.headers.get("Stripe-Signature")
+    try:
+        event = stripe.Webhook.construct_event(json.dumps(data), sig, os.environ.get("STRIPE_WEBHOOK_SECRET", "whsec_local_dev_only"))
+    except stripe.error.SignatureVerificationError:
+        abort(400)
+    if event["type"] == "payment_intent.succeeded":
+        mark_paid(event["data"]["object"]["id"])
+    return "", 200

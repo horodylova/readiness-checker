@@ -76,6 +76,17 @@ describe("signature probe", () => {
     expect(c.command).toContain("readiness.check.unsigned");
     expect(JSON.parse(probeBody).type).toBe("readiness.check.unsigned");
   });
+  test("PowerShell variant uses curl.exe on one line", () => {
+    const c = stripeCommands.probe("https://app.example.com/api/stripe/webhook");
+    if (!c.ok) throw new Error(c.error);
+    expect(c.powershell.startsWith("curl.exe -sS -i")).toBe(true);
+    expect(c.powershell.includes("\n")).toBe(false);
+    expect(c.command).toContain("curl -sS -i");
+  });
+  test("Invoke-WebRequest style output is read", () => {
+    const r = parseProbeResponse("StatusCode        : 400\nStatusDescription : Bad Request\nContent           : Webhook Error\nRawContent        : HTTP/1.1 400");
+    expect(r.status).toBe(400);
+  });
   test("command refuses private addresses", () => {
     expect(stripeCommands.probe("http://localhost:3000/webhook").ok).toBe(false);
   });
@@ -88,6 +99,7 @@ describe("signature probe", () => {
     ["HTTP/2 308\nlocation: https://www.app.example.com/api/webhook\n\n", "SIG-03", "high"],
     ["HTTP/2 500\n\nInternal Server Error", "SIG-02", "medium"],
     ["HTTP/2 200\n\n<!doctype html><html><body>app</body></html>", "SIG-09", "high"],
+    ["HTTP/2 403\ncontent-type: text/html\n\n<!doctype html><html><title>Just a moment</title></html>", "SIG-10", "info"],
     ["curl: (6) Could not resolve host: app.example.com", "SIG-05", "info"],
     ["{\"received\":true}", "SIG-06", "info"],
   ])("%s", (output, rule, severity) => {
@@ -133,6 +145,26 @@ describe("handler code", () => {
   test("checkout with server-side price map is clean", () => {
     expect(codeRules(fx("checkout-good.txt"))).toEqual([]);
   });
+  test("good Django and Rails handlers are clean, raw request.body is not a parsed body", () => {
+    expect(codeRules(fx("handler-django.txt"))).toEqual([]);
+    expect(codeRules(fx("handler-rails.txt"))).toEqual([]);
+  });
+  test("Flask handler verifying json.dumps of a parsed body, with a literal fallback secret", () => {
+    const f = codeRules(fx("handler-flask-dumps.txt"));
+    expect(has(f, "CODE-02", "high")).toBe(true);
+    expect(has(f, "CODE-05", "high")).toBe(true);
+  });
+  test("price read from the database is not a client-set price", () => {
+    expect(codeRules(fx("checkout-db-price.txt")).some((x) => x.rule === "CHK-01")).toBe(false);
+  });
+  test("the word webhook in a comment does not make checkout code a handler", () => {
+    const f = codeRules(fx("checkout-comment-webhook.txt"));
+    expect(f.some((x) => x.rule === "CODE-01")).toBe(false);
+    expect(f).toEqual([]);
+  });
+  test("handler without a route string or header read is still a handler when it switches on event.type", () => {
+    expect(has(codeRules(fx("handler-bad.txt")), "CODE-01", "critical")).toBe(true);
+  });
   test("pasted secrets are refused and not analysed", () => {
     const key = ["sk", "live", "A1b2C3d4E5f6G7h8I9j0K1l2M3n4"].join("_");
     const r = screenCode(`const stripe = new Stripe("${key}");`);
@@ -140,6 +172,15 @@ describe("handler code", () => {
     if (r.ok) return;
     expect(r.error).toContain("discarded");
     expect(r.error).not.toContain(key);
+  });
+  test("Supabase service role key and secret key are refused", () => {
+    const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
+    const service = `${b64({ alg: "HS256" })}.${b64({ iss: "supabase", ref: "abcdefghijklmnopqrst", role: "service_role" })}.${"s".repeat(43)}`;
+    expect(screenCode(`const admin = createClient(url, "${service}");`).ok).toBe(false);
+    expect(screenCode(`const k = "${["sb", "secret", "A1b2C3d4E5f6G7h8I9j0K1l2M3n4"].join("_")}";`).ok).toBe(false);
+  });
+  test("restricted test key is refused", () => {
+    expect(screenCode(`const k = "${["rk", "test", "A1b2C3d4E5f6G7h8I9j0K1l2M3n4"].join("_")}";`).ok).toBe(false);
   });
   test("whsec literal is refused too", () => {
     const secret = ["whsec", "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"].join("_");

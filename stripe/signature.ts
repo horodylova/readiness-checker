@@ -14,17 +14,21 @@ export const probeBody = JSON.stringify({
   data: { object: { id: "rc_0", object: "readiness_check" } },
 });
 
-export function probeCommand(endpointUrl: string): { ok: true; command: string } | { ok: false; error: string } {
+const FAKE_SIGNATURE = "t=1,v1=0000000000000000000000000000000000000000000000000000000000000000";
+
+export function probeCommand(endpointUrl: string): { ok: true; command: string; powershell: string } | { ok: false; error: string } {
   const t = parseTarget(endpointUrl);
   if (!t.ok) return t;
+  const url = t.url.toString().replace(/'/g, "%27");
   const body = probeBody.replace(/'/g, "'\\''");
   const command = [
-    `curl -s -i -X POST '${t.url.toString().replace(/'/g, "%27")}'`,
+    `curl -sS -i -X POST '${url}'`,
     `  -H 'Content-Type: application/json'`,
-    `  -H 'Stripe-Signature: t=1,v1=0000000000000000000000000000000000000000000000000000000000000000'`,
+    `  -H 'Stripe-Signature: ${FAKE_SIGNATURE}'`,
     `  --data '${body}'`,
   ].join(" \\\n");
-  return { ok: true, command };
+  const powershell = `curl.exe -sS -i -X POST '${url}' -H 'Content-Type: application/json' -H 'Stripe-Signature: ${FAKE_SIGNATURE}' --data '${probeBody}'`;
+  return { ok: true, command, powershell };
 }
 
 export type ProbeResponse = { status: number | null; body: string; headers: string; transportError: string | null };
@@ -44,6 +48,11 @@ export function parseProbeResponse(raw: string): ProbeResponse {
   }
   const bare = s.match(/^(\d{3})$/);
   if (bare) return { status: Number(bare[1]), body: "", headers: "", transportError: null };
+  const ps = s.match(/^StatusCode\s*:\s*(\d{3})\b/m);
+  if (ps) {
+    const content = s.match(/^Content\s*:\s*([\s\S]*?)(?=^\w+\s*:|\s*$)/m)?.[1] ?? "";
+    return { status: Number(ps[1]), body: content.trim(), headers: "", transportError: null };
+  }
   return { status: null, body: s, headers: "", transportError: null };
 }
 
@@ -69,7 +78,7 @@ export function signatureRules(resp: ProbeResponse): Finding[] {
       severity: "info",
       object: obj,
       title: "No HTTP status in the output",
-      detail: "The pasted text has no status line. The command includes -i so that the status is printed; paste the whole output.",
+      detail: "The pasted text has no status line. The command includes -i so that the status is printed; paste the whole output, from the HTTP line to the end.",
     });
     return out;
   }
@@ -95,6 +104,15 @@ export function signatureRules(resp: ProbeResponse): Finding[] {
       detail: `The handler answered ${code} to an event with an invalid signature and an unknown type. Anyone who knows the address can send "payment succeeded" or "subscription active" and the handler will act on it.`,
       remedy:
         "Verify every delivery with the webhook signing secret before reading the event, using the raw request body, and reject with 400 when verification fails. Stripe's constructEvent (or construct_event) does this in every official library.",
+    });
+  } else if ((code === 401 || code === 403) && htmlPage) {
+    add({
+      rule: "SIG-10",
+      severity: "info",
+      object: obj,
+      title: "A firewall answered before the handler",
+      detail: `The ${code} answer is an HTML page from the host or a firewall, not from the handler, so the signature check was not tested. The same protection may block Stripe's deliveries: open the endpoint in Developers, Webhooks and look at recent delivery attempts.`,
+      remedy: "Allow Stripe's requests through the protection for this path (Stripe publishes its IP ranges), then run the command again.",
     });
   } else if (code === 400 || code === 401 || code === 403) {
     add({
@@ -128,7 +146,7 @@ export function signatureRules(resp: ProbeResponse): Finding[] {
       severity: "high",
       object: obj,
       title: "Endpoint redirects",
-      detail: `The handler answered ${code}. Stripe does not follow redirects, so every event delivered to this address is dropped and the endpoint will be disabled after repeated failures.`,
+      detail: `The handler answered ${code}. Stripe does not follow redirects, so every event delivered to this address is dropped, and in live mode the endpoint is disabled after repeated failures.`,
       remedy: "Register the final address in Stripe (with or without www, with the exact path) so that the handler answers directly.",
     });
   } else if (code >= 500) {
@@ -136,9 +154,9 @@ export function signatureRules(resp: ProbeResponse): Finding[] {
       rule: "SIG-02",
       severity: "medium",
       object: obj,
-      title: "Handler crashes on a bad signature",
-      detail: `The handler answered ${code}. A failed verification should be a controlled 400. A crash means the error is not caught, so logs fill with stack traces, Stripe retries for up to three days, and a different malformed input may crash the handler before verification runs.`,
-      remedy: "Wrap the verification in a try block and return 400 on failure. Confirm that nothing reads the body before verification.",
+      title: "Handler crashed, verification outcome unclear",
+      detail: `The handler answered ${code}. Two things look the same from outside: verification threw and the error was not caught, or verification was skipped and the handler crashed on the unknown event type. Only the server log tells which. In live mode Stripe retries failed deliveries for up to three days and disables the endpoint after a run of failures.`,
+      remedy: "Open the log for this request. If verification ran, wrap it in a try block and return 400 on failure. If it did not, add it before anything reads the event. Then run the command again and expect 400.",
     });
   } else {
     add({
@@ -146,7 +164,7 @@ export function signatureRules(resp: ProbeResponse): Finding[] {
       severity: "low",
       object: obj,
       title: `Unexpected status ${code}`,
-      detail: "The handler rejected the request, but with a status Stripe treats as a failed delivery. Stripe retries failed deliveries and disables the endpoint after a run of failures.",
+      detail: "The handler rejected the request, but with a status Stripe treats as a failed delivery. In live mode Stripe retries failed deliveries and disables the endpoint after a run of failures.",
       remedy: "Return 400 for a bad signature and 2xx once the event is accepted.",
     });
   }

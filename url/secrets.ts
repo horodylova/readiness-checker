@@ -53,7 +53,7 @@ export const secretPatterns: SecretPattern[] = [
   {
     id: "SEC-STRIPE-RESTRICTED",
     name: "Stripe restricted key",
-    regex: /\brk_live_[A-Za-z0-9]{24,}/g,
+    regex: /\brk_(live|test)_[A-Za-z0-9]{24,}/g,
     severity: "high",
     remedy: rotate,
   },

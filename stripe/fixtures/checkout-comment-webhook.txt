@@ -1,0 +1,19 @@
+import Stripe from "stripe";
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+const PRICES: Record<string, string> = { pro: "price_1Pro" };
+
+// Fulfilment happens in the webhook handler, see app/api/stripe/webhook/route.ts
+export async function POST(req: Request) {
+  const user = await requireUser(req);
+  const { plan } = await req.json();
+  const price = PRICES[plan];
+  if (!price) return new Response("Unknown plan", { status: 400 });
+  const session = await stripe.checkout.sessions.create({
+    mode: "subscription",
+    customer: user.stripeCustomerId,
+    line_items: [{ price, quantity: 1 }],
+    success_url: "https://app.example.com/billing",
+    cancel_url: "https://app.example.com/pricing",
+  });
+  return Response.json({ url: session.url });
+}
