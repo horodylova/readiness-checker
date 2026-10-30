@@ -221,9 +221,18 @@ describe("routing", () => {
     [fx("handler-python.txt"), "code"],
     [fx("checkout-bad.txt"), "code"],
     ['{"object":"customer"}', "unknown"],
+    ["stripe webhook_endpoints list --limit 100", "unknown"],
+    [(() => { const c = stripeCommands.probe("https://app.example.com/api/stripe/webhook"); return c.ok ? c.command : ""; })(), "unknown"],
+    [(() => { const c = stripeCommands.probe("https://app.example.com/api/stripe/webhook"); return c.ok ? c.powershell : ""; })(), "unknown"],
     ["hello", "unknown"],
   ])("routes input %#", (input, kind) => {
     expect(detectStripeInput(input).kind).toBe(kind);
+  });
+  test("pasting the command itself is explained, not analysed as code", () => {
+    const c = stripeCommands.probe("https://app.example.com/api/stripe/webhook");
+    const r = runStripeCheck(c.ok ? c.command : "");
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error).toContain("command itself");
   });
   test("runStripeCheck returns reports with the right engine", () => {
     const a = runStripeCheck(fx("endpoints-bad.json"));
